@@ -23,11 +23,25 @@ echo "
 log "Atualizando sistema..."
 apt update && apt upgrade -y
 
+log "Configurando atualizações automáticas de segurança..."
+apt install -y unattended-upgrades
+dpkg-reconfigure -f noninteractive unattended-upgrades
+
 # ── SSH ───────────────────────────────────────────────────────────────────────
 
 log "Instalando e ativando SSH..."
 apt install -y openssh-server
 systemctl enable --now ssh
+
+log "Hardening do SSH..."
+cat > /etc/ssh/sshd_config.d/hardening.conf <<EOF
+PermitRootLogin no
+MaxAuthTries 3
+LoginGraceTime 30
+EOF
+grep -q '^Include /etc/ssh/sshd_config.d/\*\.conf' /etc/ssh/sshd_config \
+    || echo 'Include /etc/ssh/sshd_config.d/*.conf' >> /etc/ssh/sshd_config
+systemctl restart ssh
 
 # ── Notebook como servidor ────────────────────────────────────────────────────
 
@@ -81,6 +95,19 @@ if [[ -n "${SUDO_USER:-}" ]]; then
     usermod -aG docker "$SUDO_USER"
     warn "Usuário '$SUDO_USER' adicionado ao grupo docker (requer novo login para ter efeito)."
 fi
+
+log "Configurando log rotation do Docker..."
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "5"
+  }
+}
+EOF
+systemctl restart docker
 
 # ── Portainer ─────────────────────────────────────────────────────────────────
 
@@ -148,5 +175,10 @@ echo "================================="
 warn "Proximos passos manuais:"
 echo "  1. tailscale up"
 echo "  2. Portainer: https://${SERVER_IP}:9443"
-echo "  3. Desative login por senha no SSH:"
-echo "     PasswordAuthentication no  →  /etc/ssh/sshd_config"
+echo "  3. Depois de confirmar que sua chave SSH funciona, desative login por senha:"
+echo "     PasswordAuthentication no  →  /etc/ssh/sshd_config.d/hardening.conf"
+echo "     systemctl restart ssh"
+echo "  4. Depois de confirmar acesso via Tailscale, restrinja o SSH a ele:"
+echo "     ufw deny 22/tcp"
+echo "     ufw allow in on tailscale0 to any port 22"
+
